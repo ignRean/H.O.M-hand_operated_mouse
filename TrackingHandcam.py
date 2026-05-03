@@ -3,6 +3,7 @@ import mediapipe as mp #this is used for hand tracking
 import time #This is for calculating the FPS of the hand tracking to see how well it performs on my computer.
 import mouse #This is the main library i will be using to control the mouse.
 import ctypes # i ma use this to get the screen resolution to better map the hand to mouse.
+import math #this is used to calculate the distance between the thumb and index finger to determine when to click.
 
 
 #Ts was slightly hard to understand but i got it cuz i am him
@@ -17,7 +18,13 @@ last_print_time = 0
 user32=ctypes.windll.user32
 screen_width, screen_height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 SmoothX, SmoothY = 0, 0
-SmootheningFactor = 0.35
+SmootheningFactor = 0.15
+framepercentw = 0.35
+framepercenth = 0.35
+ispressed = False
+frezzethreshold = 0.08
+pressthreshold = 0.06
+releasethreshold = 0.10
 
 def print_result(result: HandLandmarker, output_image: mp.Image, timestamp_ms: int):
     global latest_result
@@ -71,12 +78,37 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         end = (int(p2.x * w), int(p2.y * h))
                         cv.line(frame, start, end, color, 3)
                 for lm in hand_lms:
-                        cv.circle(frame, (int(lm.x * w), int(lm.y * h)), 4, (255, 255, 255), -1)   
-            rawX= latest_result.hand_landmarks[0][8].x * screen_width
-            rawY= latest_result.hand_landmarks[0][8].y * screen_height
-            SmoothX = SmoothX + (rawX - SmoothX) * SmootheningFactor
-            SmoothY = SmoothY + (rawY - SmoothY) * SmootheningFactor
+                        cv.circle(frame, (int(lm.x * w), int(lm.y * h)), 4, (255, 255, 255), -1)
+            pinch_gap_index= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][4].y)
+            pinch_gap_middle= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][12].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][12].y)
+            pinch_gap_ring= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][16].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][16].y)
+            if pinch_gap_index < frezzethreshold:
+                pass
+            else:
+                rawX= latest_result.hand_landmarks[0][8].x * screen_width
+                rawY= latest_result.hand_landmarks[0][8].y * screen_height
+                MappedX = int((rawX - (screen_width * framepercentw)) * (screen_width / (screen_width * (1 - 2 * framepercentw))))
+                MappedY = int((rawY - (screen_height * framepercenth)) * (screen_height / (screen_height * (1 - 2 * framepercenth))))
+                SmoothX = SmoothX + (MappedX - SmoothX) * SmootheningFactor
+                SmoothY = SmoothY + (MappedY - SmoothY) * SmootheningFactor
+    #            if pinch_gap_middle < pressthreshold:
+    #                mouse.right_click()
+    #                print("Right Clicked")
+    #            elif pinch_gap_ring < pressthreshold:
+    #                mouse.drag(SmoothX, SmoothY, absolute=True, duration=0)
+    #                print("Dragging")
+
             mouse.move(SmoothX, SmoothY, absolute=True, duration=0)
+            if pinch_gap_index < pressthreshold and not ispressed:
+                mouse.press()
+                ispressed = True
+                print("Pressed")
+                print(pinch_gap_index)
+            elif pinch_gap_index > releasethreshold and ispressed:
+                mouse.release()
+                ispressed = False
+                print("Released")
+
 
         cv.imshow('Custom Color Coded Tracker', frame)
         if cv.waitKey(1) & 0xFF == ord('q'):
