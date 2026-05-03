@@ -17,7 +17,7 @@ last_print_time = 0
 user32=ctypes.windll.user32
 screen_width, screen_height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 SmoothX, SmoothY = 0, 0
-SmootheningFactor = 0.2
+SmootheningFactor = 0.35
 
 def print_result(result: HandLandmarker, output_image: mp.Image, timestamp_ms: int):
     global latest_result
@@ -29,7 +29,7 @@ options = HandLandmarkerOptions(
     result_callback=print_result,
     min_hand_detection_confidence=0.3,
     min_hand_presence_confidence=0.3,
-    num_hands=2 # Allows tracking both hands
+    num_hands=1 # Allows tracking both hands
 )
 
 FINGER_MAP = {
@@ -74,9 +74,9 @@ with HandLandmarker.create_from_options(options) as landmarker:
                         cv.circle(frame, (int(lm.x * w), int(lm.y * h)), 4, (255, 255, 255), -1)   
             rawX= latest_result.hand_landmarks[0][8].x * screen_width
             rawY= latest_result.hand_landmarks[0][8].y * screen_height
-            SmoothX = (SmoothX + (1 - SmoothX)) + (rawX * SmootheningFactor)
-            SmoothY = (SmoothY + (1 - SmoothY)) + (rawY * SmootheningFactor)
-            mouse.move(rawX, rawY)
+            SmoothX = SmoothX + (rawX - SmoothX) * SmootheningFactor
+            SmoothY = SmoothY + (rawY - SmoothY) * SmootheningFactor
+            mouse.move(SmoothX, SmoothY, absolute=True, duration=0)
 
         cv.imshow('Custom Color Coded Tracker', frame)
         if cv.waitKey(1) & 0xFF == ord('q'):
@@ -84,7 +84,4 @@ with HandLandmarker.create_from_options(options) as landmarker:
     cap.release()
     cv.destroyAllWindows()
 
-
-#The Main Mouse Part [i might be fucked]
-#planning to use the Mouse Library to control the mouse cursor based on the position of the index finger tip (landmark 8)
 
