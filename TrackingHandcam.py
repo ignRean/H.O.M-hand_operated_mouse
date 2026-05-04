@@ -22,9 +22,10 @@ SmootheningFactor = 0.15
 framepercentw = 0.35
 framepercenth = 0.35
 ispressed = False
-frezzethreshold = 0.08
+frezzethreshold = 0.10
 pressthreshold = 0.06
-releasethreshold = 0.10
+#pressthresholdrightclick = 0.015
+#releasethreshold = 0.10
 
 def print_result(result: HandLandmarker, output_image: mp.Image, timestamp_ms: int):
     global latest_result
@@ -34,8 +35,9 @@ options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
     running_mode=VisionRunningMode.LIVE_STREAM,
     result_callback=print_result,
-    min_hand_detection_confidence=0.3,
-    min_hand_presence_confidence=0.3,
+    min_hand_detection_confidence=0.5,
+    min_hand_presence_confidence=0.2,
+    min_tracking_confidence=0.2,
     num_hands=1 # Allows tracking both hands
 )
 
@@ -60,7 +62,8 @@ with HandLandmarker.create_from_options(options) as landmarker:
         
         frame = cv.flip(frame, 1)
         h, w, _ = frame.shape
-        rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+        frame_small = cv.resize(frame, (w // 2, h // 2))
+        rgb_frame = cv.cvtColor(frame_small, cv.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         
         frame_timestamp_ms += 1
@@ -69,7 +72,7 @@ with HandLandmarker.create_from_options(options) as landmarker:
             for hand_lms in latest_result.hand_landmarks:
                 # Draw Connections
                 for name, (connections, color) in FINGER_MAP.items():
-                    for connection in connections:
+                   for connection in connections:
       
                         p1 = hand_lms[connection[0]]
                         p2 = hand_lms[connection[1]]
@@ -80,9 +83,11 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 for lm in hand_lms:
                         cv.circle(frame, (int(lm.x * w), int(lm.y * h)), 4, (255, 255, 255), -1)
             pinch_gap_index= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][4].y)
-            pinch_gap_middle= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][12].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][12].y)
-            pinch_gap_ring= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][16].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][16].y)
+            pinch_gap_middle= math.hypot(latest_result.hand_landmarks[0][12].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][12].y - latest_result.hand_landmarks[0][4].y)
+            pinch_gap_ring= math.hypot(latest_result.hand_landmarks[0][16].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][16].y - latest_result.hand_landmarks[0][4].y)
             if pinch_gap_index < frezzethreshold:
+                pass
+            elif pinch_gap_middle < frezzethreshold:
                 pass
             else:
                 rawX= latest_result.hand_landmarks[0][8].x * screen_width
@@ -91,26 +96,35 @@ with HandLandmarker.create_from_options(options) as landmarker:
                 MappedY = int((rawY - (screen_height * framepercenth)) * (screen_height / (screen_height * (1 - 2 * framepercenth))))
                 SmoothX = SmoothX + (MappedX - SmoothX) * SmootheningFactor
                 SmoothY = SmoothY + (MappedY - SmoothY) * SmootheningFactor
-    #            if pinch_gap_middle < pressthreshold:
-    #                mouse.right_click()
-    #                print("Right Clicked")
-    #            elif pinch_gap_ring < pressthreshold:
-    #                mouse.drag(SmoothX, SmoothY, absolute=True, duration=0)
-    #                print("Dragging")
+                mouse.move(SmoothX, SmoothY, absolute=True, duration=0)
 
-            mouse.move(SmoothX, SmoothY, absolute=True, duration=0)
-            if pinch_gap_index < pressthreshold and not ispressed:
-                mouse.press()
-                ispressed = True
-                print("Pressed")
-                print(pinch_gap_index)
-            elif pinch_gap_index > releasethreshold and ispressed:
-                mouse.release()
+            if pinch_gap_index < pressthreshold:
+                if not ispressed:
+                    mouse.click() 
+                    ispressed = True
+                    print("clicked")
+            elif pinch_gap_middle < pressthreshold:
+                if not ispressed:
+                    mouse.right_click()
+                    ispressed = True
+                    print("Right Clicked")
+                    print(pinch_gap_middle)
+            elif pinch_gap_ring < pressthreshold:
+                if not ispressed:
+                    mouse.press()
+            elif pinch_gap_ring > pressthreshold:
+                if ispressed:
+                    mouse.release()
+                    ispressed = False
+                    print("Released")
+
+                
+
+            else:
                 ispressed = False
-                print("Released")
 
 
-        cv.imshow('Custom Color Coded Tracker', frame)
+        cv.imshow('Custom Color Coded Tracker', frame_small)
         if cv.waitKey(1) & 0xFF == ord('q'):
             break
     cap.release()
