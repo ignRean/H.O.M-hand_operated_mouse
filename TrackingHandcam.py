@@ -20,10 +20,10 @@ latest_result = None
 user32=ctypes.windll.user32
 screen_width, screen_height = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 SmoothX, SmoothY = 0, 0
-framepercentw = 0.25
-framepercenth = 0.25
+framepercentw = 0.40
+framepercenth = 0.40
 ispressed = False
-frezzethreshold = 0.45
+slowthreshold = 0.45
 pressthreshold = 0.25
 is_paused = True
 app_running = True
@@ -48,9 +48,10 @@ options = HandLandmarkerOptions(
 def tracking_thread():
     global SmoothX, SmoothY, ispressed, app_running, is_paused, clicktime
     with HandLandmarker.create_from_options(options) as landmarker:
-        cap = cv.VideoCapture(0, cv.CAP_DSHOW)
+        cap = cv.VideoCapture(1)
         cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480) 
+        cap.set(cv.CAP_PROP_FPS, 60)
         frame_timestamp_ms = 0
     
         while cap.isOpened() and app_running:
@@ -79,22 +80,21 @@ def tracking_thread():
 
 
 
-
-                if (pinch_ratio_index < frezzethreshold or pinch_ratio_middle < frezzethreshold):
-                    pass
+                rawX= latest_result.hand_landmarks[0][9].x * screen_width
+                rawY= latest_result.hand_landmarks[0][9].y * screen_height
+                MappedX = int((rawX - (screen_width * framepercentw)) * (screen_width / (screen_width * (1 - 2 * framepercentw))))
+                MappedY = int((rawY - (screen_height * framepercenth)) * (screen_height / (screen_height * (1 - 2 * framepercenth))))
+                distance_to_target = math.hypot(SmoothX - MappedX, SmoothY - MappedY)
+                if pinch_ratio_index < slowthreshold or pinch_ratio_middle < slowthreshold and not ispressed:
+                    SmootheningFactor = 0.02
                 else:
-                    rawX= latest_result.hand_landmarks[0][9].x * screen_width
-                    rawY= latest_result.hand_landmarks[0][9].y * screen_height
-                    MappedX = int((rawX - (screen_width * framepercentw)) * (screen_width / (screen_width * (1 - 2 * framepercentw))))
-                    MappedY = int((rawY - (screen_height * framepercenth)) * (screen_height / (screen_height * (1 - 2 * framepercenth))))
-                    distance_to_target = math.hypot(SmoothX - MappedX, SmoothY - MappedY)
                     if distance_to_target < 15:
                         SmootheningFactor=0.05
                     else:
                         SmootheningFactor=0.30
-                    SmoothX = SmoothX + (MappedX - SmoothX) * SmootheningFactor
-                    SmoothY = SmoothY + (MappedY - SmoothY) * SmootheningFactor
-                    mouse.move(int(SmoothX), int(SmoothY), absolute=True, duration=0)
+                SmoothX = SmoothX + (MappedX - SmoothX) * SmootheningFactor
+                SmoothY = SmoothY + (MappedY - SmoothY) * SmootheningFactor
+                mouse.move(int(SmoothX), int(SmoothY), absolute=True, duration=0)
 
                 if pinch_ratio_index < pressthreshold:
                     if not ispressed:
