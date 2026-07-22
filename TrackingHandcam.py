@@ -7,6 +7,7 @@ import math #this is used to calculate the distance between the thumb and index 
 import tkinter as tk
 import threading
 import os
+import keyboard
 
 
 #Ts was slightly hard to understand but i got it cuz i am him
@@ -24,17 +25,58 @@ framepercentw = 0.30
 framepercenth = 0.30
 ispressed = False
 slowthreshold = 0.45
-pressthreshold = 0.25
+pressthreshold = 0.17
+dragthreshold= 0.12
 is_paused = True
 app_running = True
 clicktime=0 
 #pressthresholdrightclick = 0.015
 #releasethreshold = 0.10
 
+class OneEuroFilter:
+    def __init__(self, min_cutoff=1.0, beta=0.0, d_cutoff=1.0):
+        self.min_cutoff = min_cutoff
+        self.beta = beta
+        self.d_cutoff = d_cutoff
+        self.x_prev = 0.0
+        self.dx_prev = 0.0
+        self.t_prev = 0.0
+        self.initialized = False
+
+    def smoothing_factor(self, t_e, cutoff):
+        r = 2 * math.pi * cutoff * t_e
+        return r / (r + 1)
+
+    def __call__(self, t, x):
+        if not self.initialized:
+            self.x_prev = x
+            self.dx_prev = 0.0
+            self.t_prev = t
+            self.initialized = True
+            return x
+            
+        t_e = t - self.t_prev
+        if t_e <= 0.0:
+            return x
+            
+        a_d = self.smoothing_factor(t_e, self.d_cutoff)
+        dx = (x - self.x_prev) / t_e
+        dx_hat = a_d * dx + (1 - a_d) * self.dx_prev
+        
+        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
+        a = self.smoothing_factor(t_e, cutoff)
+        x_hat = a * x + (1 - a) * self.x_prev
+        
+        self.x_prev = x_hat
+        self.dx_prev = dx_hat
+        self.t_prev = t
+        return x_hat
+
+#The print_result function is the callback function that will be called every time the hand landmarker has a new result. It takes in the result, the output image, and the timestamp of the frame. In this function, we simply update the latest_result variable with the new result so that we can use it in the tracking_thread function to control the mouse.
 def print_result(result: HandLandmarker, output_image: mp.Image, timestamp_ms: int):
     global latest_result
     latest_result = result
-
+#Here we are setting up the options for the hand landmarker. We specify the model asset path, the running mode (live stream), the callback function, and some confidence thresholds for hand detection, presence, and tracking. We also specify that we only want to track one hand to improve performance.
 options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
     running_mode=VisionRunningMode.LIVE_STREAM,
@@ -44,11 +86,17 @@ options = HandLandmarkerOptions(
     min_tracking_confidence=0.7,
     num_hands=1 
 )
-
+#I am using the live stream mode of the hand landmarker, which means that it will continuously process the frames from the webcam and call the print_result function with the latest results. The print_result function simply updates the latest_result variable with the latest hand landmarks detected by the model.
 def tracking_thread():
     global SmoothX, SmoothY, ispressed, app_running, is_paused, clicktime
+    
+    # Initialize One Euro Filters for X and Y coordinates
+    filter_x = OneEuroFilter(min_cutoff=0.1, beta=0.01)
+    filter_y = OneEuroFilter(min_cutoff=0.1, beta=0.01)
+    prev_scroll_y = None
+    
     with HandLandmarker.create_from_options(options) as landmarker:
-        cap = cv.VideoCapture(1)
+        cap = cv.VideoCapture(0)
         cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480) 
         cap.set(cv.CAP_PROP_FPS, 60)
@@ -71,60 +119,75 @@ def tracking_thread():
                 palm_area = math.hypot(latest_result.hand_landmarks[0][0].x - latest_result.hand_landmarks[0][9].x, latest_result.hand_landmarks[0][0].y - latest_result.hand_landmarks[0][9].y )
                 if palm_area < 0.00000001:
                     palm_area = 0.00000001
-                pinch_gap_index= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][4].y)
-                pinch_gap_middle= math.hypot(latest_result.hand_landmarks[0][12].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][12].y - latest_result.hand_landmarks[0][4].y)
-                pinch_gap_ring= math.hypot(latest_result.hand_landmarks[0][16].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][16].y - latest_result.hand_landmarks[0][4].y)
-                pinch_ratio_index = pinch_gap_index / palm_area
-                pinch_ratio_middle = pinch_gap_middle / palm_area
-                pinch_ratio_ring = pinch_gap_ring / palm_area
+                # Left click: Index Tip (8) to Thumb Tip (4)
+                pinch_gap_leftclick= math.hypot(latest_result.hand_landmarks[0][8].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][8].y - latest_result.hand_landmarks[0][4].y)
+                # Right click: Middle Tip (12) to Thumb Tip (4)
+                pinch_gap_rightclick= math.hypot(latest_result.hand_landmarks[0][12].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][12].y - latest_result.hand_landmarks[0][4].y)
+                # Drag: Ring Tip (16) to Thumb Tip (4)
+                pinch_gap_drag= math.hypot(latest_result.hand_landmarks[0][16].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][16].y - latest_result.hand_landmarks[0][4].y)
+                # Scroll: Pinky Tip (20) to Thumb Tip (4)
+                pinch_gap_scroll = math.hypot(latest_result.hand_landmarks[0][20].x - latest_result.hand_landmarks[0][4].x, latest_result.hand_landmarks[0][20].y - latest_result.hand_landmarks[0][4].y)
+                
+                pinch_ratio_leftclick = pinch_gap_leftclick / palm_area
+                pinch_ratio_rightclick = pinch_gap_rightclick / palm_area
+                pinch_ratio_drag = pinch_gap_drag / palm_area
+                pinch_ratio_scroll = pinch_gap_scroll / palm_area
 
-
-
-                rawX= latest_result.hand_landmarks[0][9].x * screen_width
-                rawY= latest_result.hand_landmarks[0][9].y * screen_height
+                rawX= latest_result.hand_landmarks[0][5].x * screen_width
+                rawY= latest_result.hand_landmarks[0][5].y * screen_height
                 MappedX = int((rawX - (screen_width * framepercentw)) * (screen_width / (screen_width * (1 - 2 * framepercentw))))
                 MappedY = int((rawY - (screen_height * framepercenth)) * (screen_height / (screen_height * (1 - 2 * framepercenth))))
-                distance_to_target = math.hypot(SmoothX - MappedX, SmoothY - MappedY)
-                if pinch_ratio_index < slowthreshold or pinch_ratio_middle < slowthreshold and not ispressed:
-                    SmootheningFactor = 0.02
-                else:
-                    if distance_to_target < 15:
-                        SmootheningFactor=0.05
-                    else:
-                        SmootheningFactor=0.30
-                SmoothX = SmoothX + (MappedX - SmoothX) * SmootheningFactor
-                SmoothY = SmoothY + (MappedY - SmoothY) * SmootheningFactor
+                
+                # Apply One Euro Filter to remove jitters without adding lag
+                current_t = time.time()
+                SmoothX = filter_x(current_t, MappedX)
+                SmoothY = filter_y(current_t, MappedY)
+                
+                # Boundary clamping
+                SmoothX = max(0, min(screen_width, SmoothX))
+                SmoothY = max(0, min(screen_height, SmoothY))
+                
                 mouse.move(int(SmoothX), int(SmoothY), absolute=True, duration=0)
-
-                if pinch_ratio_index < pressthreshold:
+                #click function mi bomba
+                if pinch_ratio_leftclick < pressthreshold:
                     if not ispressed:
                         current_time = time.time()
                         if current_time - clicktime < 0.4:
                             mouse.double_click()
                             clicktime = 0
-                            print(f"Double Clicked (Ratio: {pinch_ratio_index:.2f})")
+                            print(f"Double Clicked (Ratio: {pinch_ratio_leftclick:.2f})")
                         else:
                             mouse.click() 
                             clicktime = current_time
                             ispressed = True
-                            print(f"Left Clicked (Ratio: {pinch_ratio_index:.2f})")
-
-                elif pinch_ratio_middle < pressthreshold:
+                            print(f"Left Clicked (Ratio: {pinch_ratio_leftclick:.2f})")
+                #right clickty your property is my property
+                elif pinch_ratio_rightclick < pressthreshold:
                     if not ispressed:
                         mouse.right_click()
                         ispressed = True
                         print("Right Clicked")
-                        print(f"Right Clicked (Ratio: {pinch_ratio_middle:.2f})")
-                elif pinch_ratio_ring < pressthreshold:
+                        print(f"Right Clicked (Ratio: {pinch_ratio_rightclick:.2f})")
+                #slay drag and drop like a boss
+                elif pinch_ratio_drag < pressthreshold:
                     if not ispressed:
                         mouse.press()
                         ispressed = True
-                        print(f"Dragging (Ratio: {pinch_ratio_ring:.2f})")
+                        print(f"Dragging (Ratio: {pinch_ratio_drag:.2f})")
+                elif pinch_ratio_scroll < pressthreshold:
+                    if prev_scroll_y is not None:
+                        scroll_delta = prev_scroll_y - MappedY
+                        # Adjust scroll speed multiplier as needed
+                        if abs(scroll_delta) > 2:
+                            mouse.wheel(int(scroll_delta / 5))
+                    prev_scroll_y = MappedY
                 else:
+                    prev_scroll_y = None
                     if ispressed:
                         mouse.release()
                         ispressed = False
                         print("released")
+            
     cap.release()
 
 def check_tracking():
@@ -158,6 +221,9 @@ root.protocol("WM_DELETE_WINDOW", on_closing)
 
 tracking_thread_instance = threading.Thread(target=tracking_thread)
 tracking_thread_instance.start()
+
+# Register the global hotkey to pause/resume tracking
+keyboard.add_hotkey('f8', lambda: root.after(0, check_tracking))
 
 root.mainloop()
 
